@@ -117,37 +117,47 @@ Be conversational and helpful, but stick strictly to the provided movies."""
             return "Error generating recommendations"
 
     def fetch_movies_from_tmdb(self) -> List[Dict]:
-        """Fetch movies from TMDB API"""
+        """Fetch diverse movies from TMDB API for broad coverage"""
 
         print("Fetching movies from TMDB...")
 
         movies = []
+        
+        # Strategic endpoints for maximum genre/type coverage with minimal API calls
         endpoints = [
+            # Core popular and quality movies
             f"https://api.themoviedb.org/3/movie/popular?api_key={self.tmdb_api_key}&page=1",
             f"https://api.themoviedb.org/3/movie/top_rated?api_key={self.tmdb_api_key}&page=1",
-            f"https://api.themoviedb.org/3/discover/movie?api_key={self.tmdb_api_key}&with_genres=27&sort_by=popularity.desc&page=1",  # Horror
-            f"https://api.themoviedb.org/3/discover/movie?api_key={self.tmdb_api_key}&with_keywords=9714&sort_by=popularity.desc&page=1",  # True story
+            
+            # Discover with diverse genres mixed - covers most common user requests
+            f"https://api.themoviedb.org/3/discover/movie?api_key={self.tmdb_api_key}&with_genres=28,35,18&sort_by=popularity.desc&page=1",  # Action, Comedy, Drama
+            f"https://api.themoviedb.org/3/discover/movie?api_key={self.tmdb_api_key}&with_genres=27,878,53&sort_by=popularity.desc&page=1",  # Horror, Sci-Fi, Thriller
+            f"https://api.themoviedb.org/3/discover/movie?api_key={self.tmdb_api_key}&with_genres=10749,16,14&sort_by=popularity.desc&page=1",  # Romance, Animation, Fantasy
+            
+            # Recent releases for current movies
+            f"https://api.themoviedb.org/3/movie/now_playing?api_key={self.tmdb_api_key}&page=1",
         ]
 
-        for endpoint in endpoints:
+        for i, endpoint in enumerate(endpoints):
             try:
                 response = requests.get(endpoint, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
                     movies.extend(data.get("results", []))
-                time.sleep(0.5)  # Rate limiting
+                    print(f"Fetched {len(data.get('results', []))} movies from endpoint {i+1}")
+                time.sleep(0.3)  # Rate limiting
             except Exception as e:
-                print(f"Error fetching movies: {e}")
+                print(f"Error fetching movies from endpoint {i+1}: {e}")
 
         # Remove duplicates
         unique_movies = {movie["id"]: movie for movie in movies}
         self.movies_cache = list(unique_movies.values())
 
-        print(f"Loaded {len(self.movies_cache)} unique movies")
+        print(f"✅ Loaded {len(self.movies_cache)} unique movies across multiple genres")
         return self.movies_cache
 
     def filter_movies_by_query(self, query: str, movies: List[Dict]) -> List[Dict]:
-        """Filter movies based on query criteria"""
+        """Filter movies based on query criteria with broad genre support"""
 
         query_lower = query.lower()
         filtered = []
@@ -156,36 +166,67 @@ Be conversational and helpful, but stick strictly to the provided movies."""
             score = 0
             title = movie.get("title", "").lower()
             overview = movie.get("overview", "").lower()
+            genres = [g.get("name", "").lower() for g in movie.get("genres", [])]
 
-            # Genre filtering
-            if "horror" in query_lower and (
-                "horror" in overview or "scary" in overview
-            ):
-                score += 3
-            if "comedy" in query_lower and "comedy" in overview:
-                score += 3
-            if "action" in query_lower and "action" in overview:
-                score += 3
+            # Enhanced genre filtering - covers major genres
+            genre_keywords = {
+                "horror": ["horror", "scary", "terrifying", "frightening"],
+                "comedy": ["comedy", "funny", "hilarious", "humor"],
+                "action": ["action", "adventure", "fight", "battle"],
+                "drama": ["drama", "dramatic", "emotional"],
+                "sci-fi": ["science fiction", "sci-fi", "space", "future", "alien"],
+                "romance": ["romance", "romantic", "love", "relationship"],
+                "thriller": ["thriller", "suspense", "mystery"],
+                "fantasy": ["fantasy", "magic", "magical", "wizard"],
+                "animation": ["animation", "animated", "cartoon"],
+                "crime": ["crime", "criminal", "heist", "detective"],
+                "documentary": ["documentary", "real life", "true story"]
+            }
 
-            # Real events filtering
-            if any(
-                keyword in query_lower
-                for keyword in ["real events", "true story", "based on"]
-            ):
-                if any(keyword in overview for keyword in ["true", "real", "based"]):
-                    score += 3
+            # Check for genre matches
+            for genre, keywords in genre_keywords.items():
+                if any(keyword in query_lower for keyword in keywords):
+                    if any(keyword in overview for keyword in keywords) or genre in " ".join(genres):
+                        score += 3
 
-            # Rating filtering
-            if "highly rated" in query_lower or "top rated" in query_lower:
+            # Time period filtering
+            if any(period in query_lower for period in ["recent", "new", "latest", "2020s"]):
+                year = movie.get("release_date", "")
+                if year and int(year[:4]) >= 2020:
+                    score += 2
+            elif any(period in query_lower for period in ["classic", "old", "vintage", "90s", "80s"]):
+                year = movie.get("release_date", "")
+                if year and int(year[:4]) <= 2000:
+                    score += 2
+
+            # Rating and quality filtering
+            if any(keyword in query_lower for keyword in ["highly rated", "top rated", "best", "acclaimed"]):
                 rating = movie.get("vote_average", 0)
                 if rating >= 7.5:
+                    score += 3
+                elif rating >= 6.5:
+                    score += 1
+
+            # Runtime filtering
+            if any(keyword in query_lower for keyword in ["short", "under 2 hours", "quick"]):
+                runtime = movie.get("runtime", 0)
+                if runtime and runtime <= 120:
+                    score += 2
+            elif any(keyword in query_lower for keyword in ["long", "epic", "over 2 hours"]):
+                runtime = movie.get("runtime", 0)
+                if runtime and runtime >= 150:
                     score += 2
 
-            # General relevance
-            query_words = query_lower.split()
+            # Special content filtering
+            if any(keyword in query_lower for keyword in ["real events", "true story", "based on", "biographical"]):
+                if any(keyword in overview for keyword in ["true", "real", "based", "actual", "biography"]):
+                    score += 3
+
+            # General relevance - title and plot matching
+            query_words = [word for word in query_lower.split() if len(word) > 2]  # Skip short words
             for word in query_words:
                 if word in title:
-                    score += 2
+                    score += 3
                 if word in overview:
                     score += 1
 
@@ -193,7 +234,7 @@ Be conversational and helpful, but stick strictly to the provided movies."""
                 movie["relevance_score"] = score
                 filtered.append(movie)
 
-        # Sort by relevance and rating
+        # Sort by relevance score, then by rating
         filtered.sort(
             key=lambda x: (x.get("relevance_score", 0), x.get("vote_average", 0)),
             reverse=True,
@@ -322,11 +363,13 @@ def main():
 
     system = SimpleMovieRecommendationSystem()
 
-    # Test queries
+    # Test queries - diverse examples to show broad capabilities
     test_queries = [
-        "Find me a horror movie which is based on real events with runtime under 2 hours",
-        "Recommend highly rated science fiction movies",
-        "Show me funny romantic comedies",
+        "Find me a recent action movie with high ratings",
+        "Recommend classic romantic comedies",
+        "Show me sci-fi movies about space exploration",
+        "I want to watch animated films for family night",
+        "Find thriller movies with mystery elements"
     ]
 
     for query in test_queries:
