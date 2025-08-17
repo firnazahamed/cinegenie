@@ -130,29 +130,66 @@ class QueryProcessor:
         else:
             return {"$and": filters}
     
-    def enhance_query_for_real_events(self, query: str) -> str:
-        if any(keyword in query.lower() for keyword in self.real_events_keywords):
-            enhanced_query = f"{query} true story based on real events biographical historical documentary factual"
-            return enhanced_query
-        return query
     
     def process_query(self, user_query: str, n_results: int = 15) -> Tuple[List[Dict], Dict]:
+        """
+        Process user query using a hybrid approach combining constraint filtering and semantic search.
+        
+        This function implements a two-stage hybrid recommendation approach:
+        
+        1. **Constraint Extraction & Filtering**: 
+           - Extracts specific constraints (genre, year, runtime, rating) from natural language
+           - Applies these as hard filters to the vector database
+           - Handles precise requirements like "movies from 2020" or "under 2 hours"
+        
+        2. **Semantic Search**:
+           - Converts the enhanced query to embeddings using OpenAI's text-embedding-ada-002
+           - Performs cosine similarity search against movie embeddings
+           - Captures semantic meaning and context beyond keyword matching
+        
+        **Hybrid Benefits**:
+        - Semantic search handles creative queries: "movies like Inception but funnier"
+        - Constraint filtering handles precise requirements: "horror movies from 1980s with rating > 7"
+        - Fallback mechanism: if constrained search yields no results, tries pure semantic search
+        
+        **Direct Embedding**:
+        - Passes user query directly to embedding model without modification
+        - Relies on OpenAI's text-embedding-ada-002 to capture semantic meaning naturally
+        
+        Args:
+            user_query (str): Natural language movie request from user
+            n_results (int): Maximum number of results to return (default: 15)
+            
+        Returns:
+            Tuple[List[Dict], Dict]: 
+                - List of similar movies with metadata and similarity scores
+                - Dictionary of extracted features/constraints for transparency
+                
+        Example:
+            query = "Recent action movies with high ratings under 2 hours"
+            results, features = process_query(query)
+            # features = {'genres': ['action'], 'runtime_max': 120, 'quality_preference': 'high', ...}
+            # results = [movie1, movie2, ...] ranked by semantic similarity within constraints
+        """
+        # Stage 1: Extract structured features/constraints from natural language
         features = self.extract_query_features(user_query)
         
-        enhanced_query = self.enhance_query_for_real_events(user_query)
-        
-        query_embedding = self.openai_client.get_embedding(enhanced_query)
+        # Stage 2: Generate semantic embedding for the original query
+        query_embedding = self.openai_client.get_embedding(user_query)
         if not query_embedding:
             return [], features
         
+        # Stage 3: Build constraint filters for vector database
         where_filter = self.build_where_filter(features)
         
+        # Stage 4: Hybrid search - semantic similarity within constraint boundaries
         search_results = self.vector_store.search_similar_movies(
             query_embedding=query_embedding,
             n_results=n_results,
             where_filter=where_filter
         )
         
+        # Format results with metadata and similarity scores
         formatted_results = []
         if search_results and search_results.get('metadatas') and search_results['metadatas'][0]:
             for i, metadata in enumerate(search_results['metadatas'][0]):
@@ -163,6 +200,7 @@ class QueryProcessor:
                 }
                 formatted_results.append(result)
         
+        # Fallback: If constrained search yields no results, try pure semantic search
         if not formatted_results and where_filter:
             print("No results with filters, trying without filters...")
             search_results = self.vector_store.search_similar_movies(
